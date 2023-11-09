@@ -69,7 +69,6 @@ macro_rules! arithmetic_int {
         fn range_init() -> Self::RangeInfo { 1 - (Self::BITS as Self::RangeInfo) }
         fn range_update(s: &mut Self::ScaleInfo, r: &mut Self::RangeInfo) {
             let margin = s.leading_zeros();
-            println!("{}", margin);
             *s = (1 + Self::BITS - margin) as _;
             *r += 2 - (margin as Self::RangeInfo);
         }
