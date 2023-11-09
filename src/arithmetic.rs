@@ -62,7 +62,11 @@ macro_rules! arithmetic_int {
         type RangeInfo = i16;
     
         fn from_f64(x: f64) -> Self { (Self::MAX as f64 * x) as Self }
-        fn into_f64(self, i: Self::RangeInfo) -> f64 { 2_f64.powi(i as _) * self as f64 }
+        fn into_f64(self, i: Self::RangeInfo) -> f64 { 
+            let exponent = (i as i32 - f64::MIN_EXP + 2) as u64 & ((1 << (u64::BITS - f64::MANTISSA_DIGITS - 1)) - 1);
+            let scale = f64::from_bits(exponent << f64::MANTISSA_DIGITS);
+            scale * self as f64
+        }
     
         fn scale_init() -> Self::ScaleInfo { 0 }
         fn scale_update(self, i: &mut Self::ScaleInfo) { *i |= self.abs() }
