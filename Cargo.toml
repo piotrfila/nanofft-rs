@@ -1,0 +1,15 @@
+[package]
+name = "nanofft"
+version = "0.1.0"
+authors = ["Piotr Fila <piotr.fila.stud@pw.edu.pl>"]
+description = "FFT library intended for microcontrollers"
+repository = "https://github.com/piotrfila/nanofft-rs"
+readme = "README.md"
+keywords = ["fft", "dft", "fourier"]
+categories = ["algorithms", "embedded", "no-std", "science"]
+license = "MIT"
+edition = "2021"
+
+[features]
+wide_trig_lut = []
+bitrev_tables = []

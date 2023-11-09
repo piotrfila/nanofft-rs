@@ -1,0 +1,16 @@
+[package]
+name = "tests"
+version = "0.1.0"
+edition = "2021"
+authors = ["Piotr Fila <piotr.fila.stud@pw.edu.pl>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rustfft = "6.1.0"
+nanofft = { path = ".." }
+rand = "0.8.5"
+
+[features]
+wide_trig_lut = ["nanofft/wide_trig_lut"]
+bitrev_tables = ["nanofft/bitrev_tables"]
