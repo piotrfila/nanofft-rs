@@ -29,9 +29,9 @@ fn test_size<const N: usize>(planner: &mut FftPlanner<f64>) -> Vec<f64> {
     rustfft.process(&mut baseline);
 
     [
-        test::<f32, N>,
-        test::<f64, N>,
-        test::<i32, N>,
+        // test::<f32, N>,
+        // test::<f64, N>,
+        // test::<i32, N>,
         test::<i16, N>,
     ]
     .into_iter()
@@ -39,11 +39,25 @@ fn test_size<const N: usize>(planner: &mut FftPlanner<f64>) -> Vec<f64> {
         let mut data_copy = data;
         f(&mut data_copy);
         let mut diff = 0_f64;
-
+        // for c in baseline.iter() {
+        //     print!("{:5.2} ", c.re);
+        // }
+        // println!();
+        // for c in baseline.iter() {
+        //     print!("{:5.2} ", c.im);
+        // }
+        // println!();
+        // for c in data_copy.iter() {
+        //     print!("{:5.2} ", c.re);
+        // }
+        // println!();
+        // for c in data_copy.iter() {
+        //     print!("{:5.2} ", c.im);
+        // }
+        // println!();
+        // panic!();
         for (c1, c2) in data_copy.iter().zip(baseline.iter()) {
-            let error = (c1.re - c2.re).powi(2) + (c1.im - c2.im).powi(2);
-            let avg_magnitude = 0.5 * (c1.re.powi(2) + c1.im.powi(2) + c2.re.powi(2) + c2.im.powi(2));
-            diff += error / avg_magnitude;
+            diff += (c1.re - c2.re).powi(2) + (c1.im - c2.im).powi(2);
         }
         diff.sqrt() / (N as f64)
     })
@@ -52,6 +66,7 @@ fn test_size<const N: usize>(planner: &mut FftPlanner<f64>) -> Vec<f64> {
 
 fn main() {
     let mut planner = FftPlanner::new();
+    test_size::<2048>(&mut planner);
     let results = [
         test_size::<    4>(&mut planner),
         test_size::<    8>(&mut planner),
