@@ -42,8 +42,8 @@ fn test_size<const N: usize>(planner: &mut FftPlanner<f64>) -> Vec<f64> {
 
         for (c1, c2) in data_copy.iter().zip(baseline.iter()) {
             let error = (c1.re - c2.re).powi(2) + (c1.im - c2.im).powi(2);
-            let avg_magnitude = 0.5 * (c1.re.powi(2) + c1.im.powi(2) + c2.re.powi(2) + c2.im.powi(2));
-            diff += error / avg_magnitude;
+            let magnitude = c2.re.powi(2) + c2.im.powi(2);
+            diff += error / magnitude;
         }
         diff.sqrt() / (N as f64)
     })

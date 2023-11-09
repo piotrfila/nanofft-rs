@@ -29,7 +29,6 @@ fn compute_arrays<T: Arithmetic, const N: usize>(re: &mut [T; N], im: &mut [T; N
     let mut step = 1;
     while step < N {
         let jump = step << 1;
-        let step_d = step as f32;
         let mut twiddle_re = T::one();
         let mut twiddle_im = T::zero();
         let mut scale = T::scale_init();
