@@ -1,75 +1,7 @@
+mod arithmetic;
 mod tables;
 
-use core::ops::{ Add, AddAssign, Sub };
-use tables::*;
-
-pub trait Arithmetic where Self: Sized + Copy + Add<Output = Self> + Sub<Output = Self> + AddAssign {
-    type ScaleInfo: Copy;
-
-    fn from_f64(x: f64) -> Self;
-    fn into_f64(self) -> f64;
-
-    fn one() -> Self { Self::from_f64(1.0) }
-    fn zero() -> Self { Self::from_f64(0.0) }
-
-    fn scale_init() -> Self::ScaleInfo;
-    fn mul(a: Self, b: Self, scale: Self::ScaleInfo) -> Self;
-
-    fn sin_cos(angle: f32) -> (Self, Self);
-}
-
-impl Arithmetic for f32 {
-    type ScaleInfo = ();
-
-    fn from_f64(x: f64) -> Self { x as Self }
-    fn into_f64(self) -> f64 { self as f64 }
-
-    fn scale_init() -> Self::ScaleInfo { () }
-    fn mul(a: Self, b: Self, _: Self::ScaleInfo) -> Self { a * b }
-
-    fn sin_cos(angle: f32) -> (Self, Self) {
-        let len = TRIG_TABLE.len() - 1;
-        let (a, b) = if angle < 0.5 {
-            let idx = (len as f32 * angle * 2.) as usize;
-            (TRIG_TABLE[idx], -TRIG_TABLE[len - idx])
-        } else {
-            let idx = (len as f32 * (angle - 0.5) * 2.) as usize;
-            (TRIG_TABLE[len - idx], TRIG_TABLE[idx])
-        };
-        (
-            a as Self / (TrigTableT::MAX as Self),
-            b as Self / (TrigTableT::MAX as Self),
-        )
-        // ((-angle * std::f32::consts::PI) as Self).sin_cos()
-    }
-}
-
-
-impl Arithmetic for f64 {
-    type ScaleInfo = ();
-
-    fn from_f64(x: f64) -> Self { x as Self}
-    fn into_f64(self) -> f64 { self as f64 }
-
-    fn scale_init() -> Self::ScaleInfo { () }
-    fn mul(a: Self, b: Self, _: Self::ScaleInfo) -> Self { a * b }
-
-    fn sin_cos(angle: f32) -> (Self, Self) {
-        let len = TRIG_TABLE.len() - 1;
-        let (a, b) = if angle < 0.5 {
-            let idx = (len as f32 * angle * 2.) as usize;
-            (TRIG_TABLE[idx], -TRIG_TABLE[len - idx])
-        } else {
-            let idx = (len as f32 * (angle - 0.5) * 2.) as usize;
-            (TRIG_TABLE[len - idx], TRIG_TABLE[idx])
-        };
-        (
-            a as Self / (TrigTableT::MAX as Self),
-            b as Self / (TrigTableT::MAX as Self),
-        )
-        // ((-angle * std::f32::consts::PI) as Self).sin_cos()
-    }
-}
+pub use arithmetic::Arithmetic;
 
 // Use of different types for each array is intentional.
 // It allows to also use this function to rearrange a single array
@@ -91,25 +23,32 @@ fn bit_reverse_reorder<A, B, const N: usize>(re: &mut [A; N], im: &mut [B; N]) {
 }
 
 // Based on [this implementation](https://lloydrochester.com/post/c/example-fft/#test-cases-for-the-fft)
-fn compute_arrays<T: Arithmetic, const N: usize>(re: &mut [T; N], im: &mut [T; N]) {
-    let scale = T::scale_init();
+fn compute_arrays<T: Arithmetic, const N: usize>(re: &mut [T; N], im: &mut [T; N]) -> T::RangeInfo {
+    let mut range = T::range_init();
     let mut step = 1;
     while step < N {
         let jump = step << 1;
         let step_d = step as f32;
         let mut twiddle_re = T::one();
         let mut twiddle_im = T::zero();
+        let mut scale = T::scale_init();
+        for re in re.iter() {
+            re.scale_update(&mut scale);
+        }
+        for im in im.iter() {
+            im.scale_update(&mut scale);
+        }
+        T::range_update(&mut scale, &mut range);
         for group in 0..step {
             let mut pair = group;
             while pair < N {
                 let matchh = pair + step;
                 let product_re = T::mul(twiddle_re, re[matchh], scale) - T::mul(twiddle_im, im[matchh], scale);
                 let product_im = T::mul(twiddle_re, im[matchh], scale) + T::mul(twiddle_im, re[matchh], scale);
-                re[matchh] = re[pair] - product_re;
-                im[matchh] = im[pair] - product_im;
-                re[pair] += product_re;
-                im[pair] += product_im;
-
+                re[matchh] = T::mul(re[pair], T::from_f64(1.), scale) - product_re;
+                im[matchh] = T::mul(im[pair], T::from_f64(1.), scale) - product_im;
+                re[pair] = T::mul(re[pair], T::from_f64(1.), scale) + product_re;
+                im[pair] = T::mul(im[pair], T::from_f64(1.), scale) + product_im;
                 pair+=jump
             }
             
@@ -122,9 +61,10 @@ fn compute_arrays<T: Arithmetic, const N: usize>(re: &mut [T; N], im: &mut [T; N
         }
         step <<= 1;
     }
+    range
 }
 
-pub fn fft_arrays<T: Arithmetic, const N: usize>(data_re: &mut [T; N], data_im: &mut [T; N]) {
+pub fn fft_arrays<T: Arithmetic, const N: usize>(data_re: &mut [T; N], data_im: &mut [T; N]) -> T::RangeInfo {
     bit_reverse_reorder(data_re, data_im);
-    compute_arrays(data_re, data_im);
+    compute_arrays(data_re, data_im)
 }

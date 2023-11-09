@@ -9,10 +9,10 @@ use nanofft::{ Arithmetic, fft_arrays };
 fn test<T: Arithmetic, const N: usize>(data: &mut [Complex<f64>; N]) {
     let mut data_re = data.map(|x| T::from_f64(x.re));
     let mut data_im = data.map(|x| T::from_f64(x.im));
-    fft_arrays::<T, N>(&mut data_re, &mut data_im);
+    let range = fft_arrays::<T, N>(&mut data_re, &mut data_im);
     for i in 0..N {
-        data[i].re = data_re[i].into_f64();
-        data[i].im = data_im[i].into_f64();
+        data[i].re = data_re[i].into_f64(range);
+        data[i].im = data_im[i].into_f64(range);
     }
 }
 
@@ -29,14 +29,33 @@ fn test_size<const N: usize>(planner: &mut FftPlanner<f64>) -> Vec<f64> {
     rustfft.process(&mut baseline);
 
     [
-        test::<f32, N>,
-        test::<f64, N>,
+        // test::<f32, N>,
+        // test::<f64, N>,
+        // test::<i32, N>,
+        test::<i16, N>,
     ]
     .into_iter()
     .map(|f| {
         let mut data_copy = data;
         f(&mut data_copy);
         let mut diff = 0_f64;
+        // for c in baseline.iter() {
+        //     print!("{:5.2} ", c.re);
+        // }
+        // println!();
+        // for c in baseline.iter() {
+        //     print!("{:5.2} ", c.im);
+        // }
+        // println!();
+        // for c in data_copy.iter() {
+        //     print!("{:5.2} ", c.re);
+        // }
+        // println!();
+        // for c in data_copy.iter() {
+        //     print!("{:5.2} ", c.im);
+        // }
+        // println!();
+        // panic!();
         for (c1, c2) in data_copy.iter().zip(baseline.iter()) {
             diff += (c1.re - c2.re).powi(2) + (c1.im - c2.im).powi(2);
         }
@@ -47,6 +66,7 @@ fn test_size<const N: usize>(planner: &mut FftPlanner<f64>) -> Vec<f64> {
 
 fn main() {
     let mut planner = FftPlanner::new();
+    test_size::<2048>(&mut planner);
     let results = [
         test_size::<    4>(&mut planner),
         test_size::<    8>(&mut planner),
