@@ -1,3 +1,4 @@
+#![no_std]
 mod arithmetic;
 mod tables;
 
@@ -56,8 +57,8 @@ fn compute_arrays<T: Arithmetic, const N: usize>(re: &mut [T; N], im: &mut [T; N
             // if we don't iterate then don't compute
             if group+1 == step { continue }
 
-            let angle = (group as f32 + 1.) / step_d;
-            (twiddle_im, twiddle_re) = T::sin_cos(angle);
+            let angle = (group + 1) * (65536 / step);
+            (twiddle_im, twiddle_re) = T::sin_cos(angle as _);
         }
         step <<= 1;
     }

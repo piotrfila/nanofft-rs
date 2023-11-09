@@ -1,6 +1,6 @@
-const TRIG_TABLE_POINTS: usize = 16384;
+pub const TRIG_TABLE_POINTS: usize = 16384;
 #[cfg(feature = "bitrev_tables")]
-const BIT_REVERSE_TABLE_POINTS: usize = 0;
+pub const BIT_REVERSE_TABLE_POINTS: usize = 0;
 
 #[cfg(feature = "wide_trig_lut")]
 pub type TrigTableT = i32;

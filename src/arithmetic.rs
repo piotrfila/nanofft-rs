@@ -2,6 +2,12 @@
 use core::ops::{ Add, AddAssign, Sub };
 use crate::tables::*;
 
+#[cfg(feature = "wide_angle_type")]
+pub type Angle = u32;
+#[cfg(not(feature = "wide_angle_type"))]
+pub type Angle = u16;
+const ANGLE_HALF_PI: Angle = 1 << (Angle::BITS - 1);
+
 pub trait Arithmetic where Self: Sized + Copy + Add<Output = Self> + Sub<Output = Self> + AddAssign {
     type ScaleInfo: Copy;
     type RangeInfo: Copy;
@@ -18,7 +24,9 @@ pub trait Arithmetic where Self: Sized + Copy + Add<Output = Self> + Sub<Output 
     fn range_update(_: &mut Self::ScaleInfo, _: &mut Self::RangeInfo) { }
     fn mul(a: Self, b: Self, scale: Self::ScaleInfo) -> Self;
 
-    fn sin_cos(angle: f32) -> (Self, Self);
+    // Angle represens an angle in range [0, pi)
+    // angles [pi, 2pi) are not used in this fft implementation
+    fn sin_cos(angle: Angle) -> (Self, Self);
 }
 
 macro_rules! arithmetic_float {
@@ -35,13 +43,13 @@ macro_rules! arithmetic_float {
         fn range_init() -> Self::RangeInfo { () }
         fn mul(a: Self, b: Self, _: Self::ScaleInfo) -> Self { a * b }
     
-        fn sin_cos(angle: f32) -> (Self, Self) {
+        fn sin_cos(angle: Angle) -> (Self, Self) {
             let len = TRIG_TABLE.len() - 1;
-            let (a, b) = if angle < 0.5 {
-                let idx = (len as f32 * angle * 2.) as usize;
+            let (a, b) = if angle < ANGLE_HALF_PI {
+                let idx = angle as usize * len / (ANGLE_HALF_PI as usize);
                 (TRIG_TABLE[idx], -TRIG_TABLE[len - idx])
             } else {
-                let idx = (len as f32 * (angle - 0.5) * 2.) as usize;
+                let idx = (angle - ANGLE_HALF_PI) as usize * len / (ANGLE_HALF_PI as usize);
                 (TRIG_TABLE[len - idx], TRIG_TABLE[idx])
             };
             (
@@ -78,13 +86,13 @@ macro_rules! arithmetic_int {
     
         fn mul(a: Self, b: Self, s: Self::ScaleInfo) -> Self { ((a as $wide * (b as $wide)) >> (s as u32)) as Self }
     
-        fn sin_cos(angle: f32) -> (Self, Self) {
+        fn sin_cos(angle: Angle) -> (Self, Self) {
             let len = TRIG_TABLE.len() - 1;
-            let (a, b) = if angle < 0.5 {
-                let idx = (len as f32 * angle * 2.) as usize;
+            let (a, b) = if angle < ANGLE_HALF_PI {
+                let idx = angle as usize * len / (ANGLE_HALF_PI as usize);
                 (TRIG_TABLE[idx], -TRIG_TABLE[len - idx])
             } else {
-                let idx = (len as f32 * (angle - 0.5) * 2.) as usize;
+                let idx = (angle - ANGLE_HALF_PI) as usize * len / (ANGLE_HALF_PI as usize);
                 (TRIG_TABLE[len - idx], TRIG_TABLE[idx])
             };
             #[cfg(not(feature = "wide_trig_lut"))]
