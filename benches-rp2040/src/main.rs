@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+extern crate panic_usb_boot;
+
 #[rtic::app(
     device = rp_pico::hal::pac,
     dispatchers = [TIMER_IRQ_1]
@@ -10,17 +12,14 @@ mod app {
 
     use rp_pico::{
         hal,
-        hal::gpio::pin::{
-            bank0::Gpio25,
-            PushPullOutput,
-        },
+        hal::gpio::bank0::Gpio25,
         Pins,
         XOSC_CRYSTAL_FREQ,
     };
 
     use core::mem::MaybeUninit;
     use embedded_hal::digital::v2::{OutputPin, ToggleableOutputPin};
-    use panic_usb_boot as _;
+    // use panic_usb_boot as _;
     use usb_device::{class_prelude::*, prelude::*};
 
     const MONO_NUM: u32 = 1;
@@ -37,7 +36,7 @@ mod app {
     #[local]
     struct Local {
         fifo: rp_pico::hal::sio::SioFifo,
-        led: hal::gpio::Pin<Gpio25, PushPullOutput>,
+        led: hal::gpio::Pin<Gpio25, hal::gpio::FunctionSio<hal::gpio::SioOutput>, hal::gpio::PullDown>,
         serial: usbd_serial::SerialPort<'static, hal::usb::UsbBus>,
         usb_dev: UsbDevice<'static, hal::usb::UsbBus>
     }
@@ -92,32 +91,31 @@ mod app {
             let pac = unsafe { hal::pac::Peripherals::steal() };
             let mut sio = hal::Sio::new(pac.SIO);
 
-            fn test<const N: usize>(fifo: &mut hal::sio::SioFifo) {
-                let repeats: u32 = 106_496 / (N as u32 * N.trailing_zeros());
-                let buf: &mut ([i16; N], [i16; N]) = unsafe { &mut *(0x20000000 as *mut _) };
-                let t1 = crate::app::monotonics::now();
-                for _ in 0..repeats {
-                    let _ = nanofft::fft_arrays(&mut buf.0, &mut buf.1);
-                }
-                let t2 = crate::app::monotonics::now();
-                fifo.write_blocking(t2.ticks().wrapping_sub(t1.ticks()) as _);
-            }
+            let buf: &mut [(i16, i16); 65536] = unsafe { &mut *(0x20000000 as *mut _) };
+
+            let max_size = 16384;
 
             loop {
+                let mut size: usize = 4;
+
                 let _ = sio.fifo.read_blocking();
-                test::<4>(&mut sio.fifo);
-                test::<8>(&mut sio.fifo);
-                test::<16>(&mut sio.fifo);
-                test::<32>(&mut sio.fifo);
-                test::<64>(&mut sio.fifo);
-                test::<128>(&mut sio.fifo);
-                test::<256>(&mut sio.fifo);
-                test::<512>(&mut sio.fifo);
-                test::<1024>(&mut sio.fifo);
-                test::<2048>(&mut sio.fifo);
-                test::<4096>(&mut sio.fifo);
+
+                while size <= max_size {
+                    let repeats = max_size as u32 * max_size.trailing_zeros() / (size as u32 * size.trailing_zeros());
+                    let buf = &mut buf[..size];
+
+                    let t1 = crate::app::monotonics::now();
+                    for _ in 0..repeats {
+                        let _ = nanofft::i16::fft_pairs_dyn(buf);
+                    }
+                    let t2 = crate::app::monotonics::now();
+
+                    sio.fifo.write_blocking(t2.ticks().wrapping_sub(t1.ticks()) as _);
+                    size <<= 1;
+                }
                 sio.fifo.write_blocking(0);
                 sio.fifo.write_blocking(0);
+
             }
         });
 
