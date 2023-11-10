@@ -1,5 +1,4 @@
 
-use core::ops::{ Add, AddAssign, Sub };
 use crate::tables::*;
 
 #[cfg(feature = "wide_angle_type")]
@@ -8,23 +7,11 @@ pub type Angle = u32;
 pub type Angle = u16;
 const ANGLE_HALF_PI: Angle = 1 << (Angle::BITS - 1);
 
-pub trait Arithmetic where Self: Sized + Copy + Add<Output = Self> + Sub<Output = Self> + AddAssign {
-    type ScaleInfo: Copy;
-    type RangeInfo: Copy;
+pub trait Arithmetic where Self: Sized {
+    type RangeInfo;
 
     fn from_f64(x: f64) -> Self;
     fn into_f64(self, s: Self::RangeInfo) -> f64;
-
-    fn one() -> Self { Self::from_f64(1.0) }
-    fn zero() -> Self { Self::from_f64(0.0) }
-
-    fn scale_init() -> Self::ScaleInfo;
-    fn scale_update(self, _: &mut Self::ScaleInfo) { }
-    fn range_init() -> Self::RangeInfo;
-    fn range_update(_: &mut Self::ScaleInfo, _: &mut Self::RangeInfo) { }
-
-    fn mul(a: Self, b: Self, scale: Self::ScaleInfo) -> Self;
-    fn scale(self, scale: Self::ScaleInfo) -> Self;
 
     // Angle represens an angle in range [0, pi)
     // angles [pi, 2pi) are not used in this fft implementation
@@ -35,17 +22,10 @@ macro_rules! arithmetic_float {
     ($($t:ty)*) => { $(
 
     impl Arithmetic for $t {
-        type ScaleInfo = ();
         type RangeInfo = ();
     
         fn from_f64(x: f64) -> Self { x as Self }
         fn into_f64(self, _: Self::RangeInfo) -> f64 { self as f64 }
-    
-        fn scale_init() -> Self::ScaleInfo { () }
-        fn range_init() -> Self::RangeInfo { () }
-
-        fn mul(a: Self, b: Self, _: Self::ScaleInfo) -> Self { a * b }
-        fn scale(self, _: Self::ScaleInfo) -> Self { self }
     
         fn sin_cos(angle: Angle) -> (Self, Self) {
             let len = TRIG_TABLE.len() - 1;
@@ -70,7 +50,6 @@ macro_rules! arithmetic_int {
     ($(($t:ty, $wide:ty))*) => { $(
 
     impl Arithmetic for $t {
-        type ScaleInfo = $t;
         type RangeInfo = i16;
     
         fn from_f64(x: f64) -> Self { (Self::MAX as f64 * x) as Self }
@@ -78,18 +57,6 @@ macro_rules! arithmetic_int {
             let scale = f64::from_bits(((i as i32 + 2 - f64::MIN_EXP) as u64) << (f64::MANTISSA_DIGITS - 1));
             self as f64 * scale
         }
-    
-        fn scale_init() -> Self::ScaleInfo { 0 }
-        fn scale_update(self, i: &mut Self::ScaleInfo) { *i |= self.abs() }
-        fn range_init() -> Self::RangeInfo { 1 - (Self::BITS as Self::RangeInfo) }
-        fn range_update(s: &mut Self::ScaleInfo, r: &mut Self::RangeInfo) {
-            let margin = s.leading_zeros();
-            *s = (1 + Self::BITS - margin) as _;
-            *r += 2 - (margin as Self::RangeInfo);
-        }
-    
-        fn mul(a: Self, b: Self, s: Self::ScaleInfo) -> Self { ((a as $wide * (b as $wide)) >> (s as u32)) as Self }
-        fn scale(self, s: Self::ScaleInfo) -> Self { self >> ((s as u32 + 1) - Self::BITS) }
     
         fn sin_cos(angle: Angle) -> (Self, Self) {
             let len = TRIG_TABLE.len() - 1;
@@ -118,4 +85,4 @@ macro_rules! arithmetic_int {
 }
 
 arithmetic_float!(f32 f64);
-arithmetic_int!((i16, i32) (i32, i64));
+arithmetic_int!((i16, i32) (i32, i64) (i64, i128));
