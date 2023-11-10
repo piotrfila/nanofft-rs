@@ -64,7 +64,51 @@ fn compute_arrays<T: Arithmetic, const N: usize>(re: &mut [T; N], im: &mut [T; N
     range
 }
 
+// Based on [this implementation](https://lloydrochester.com/post/c/example-fft/#test-cases-for-the-fft)
+fn compute_pairs<T: Arithmetic, const N: usize>(data: &mut [(T, T); N]) -> T::RangeInfo {
+    let mut range = T::range_init();
+    let mut step = 1;
+    while step < N {
+        let jump = step << 1;
+        let mut twiddle_re = T::one();
+        let mut twiddle_im = T::zero();
+        let mut scale = T::scale_init();
+        for x in data.iter() {
+            x.0.scale_update(&mut scale);
+            x.1.scale_update(&mut scale);
+        }
+        T::range_update(&mut scale, &mut range);
+        for group in 0..step {
+            let mut pair = group;
+            while pair < N {
+                let matchh = pair + step;
+                let product_re = T::mul(twiddle_re, data[matchh].0, scale) - T::mul(twiddle_im, data[matchh].1, scale);
+                let product_im = T::mul(twiddle_re, data[matchh].1, scale) + T::mul(twiddle_im, data[matchh].0, scale);
+                data[matchh].0 = data[pair].0.scale(scale) - product_re;
+                data[matchh].1 = data[pair].1.scale(scale) - product_im;
+                data[pair].0 = data[pair].0.scale(scale) + product_re;
+                data[pair].1 = data[pair].1.scale(scale) + product_im;
+                pair += jump
+            }
+            
+            // we need the factors below for the next iteration
+            // if we don't iterate then don't compute
+            if group + 1 == step { continue }
+
+            let angle = (group + 1) * (65536 / step);
+            (twiddle_im, twiddle_re) = T::sin_cos(angle as _);
+        }
+        step <<= 1;
+    }
+    range
+}
+
 pub fn fft_arrays<T: Arithmetic, const N: usize>(data_re: &mut [T; N], data_im: &mut [T; N]) -> T::RangeInfo {
     bit_reverse_reorder(data_re, data_im);
     compute_arrays(data_re, data_im)
+}
+
+pub fn fft_pairs<T: Arithmetic, const N: usize>(data: &mut [(T, T); N]) -> T::RangeInfo {
+    bit_reverse_reorder(data, &mut [(); N]);
+    compute_pairs(data)
 }

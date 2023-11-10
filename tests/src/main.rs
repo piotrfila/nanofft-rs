@@ -4,15 +4,24 @@ extern crate nanofft;
 
 use rustfft::{ FftPlanner, num_complex::Complex };
 use rand::{ Rng, thread_rng };
-use nanofft::{ Arithmetic, fft_arrays };
+use nanofft::{ Arithmetic, fft_arrays, fft_pairs };
 
-fn test<T: Arithmetic, const N: usize>(data: &mut [Complex<f64>; N]) {
+fn test_arrays<T: Arithmetic, const N: usize>(data: &mut [Complex<f64>; N]) {
     let mut data_re = data.map(|x| T::from_f64(x.re));
     let mut data_im = data.map(|x| T::from_f64(x.im));
     let range = fft_arrays::<T, N>(&mut data_re, &mut data_im);
     for i in 0..N {
         data[i].re = data_re[i].into_f64(range);
         data[i].im = data_im[i].into_f64(range);
+    }
+}
+
+fn test_pairs<T: Arithmetic, const N: usize>(data: &mut [Complex<f64>; N]) {
+    let mut data_t = data.map(|x| (T::from_f64(x.re), T::from_f64(x.im)));
+    let range = fft_pairs::<T, N>(&mut data_t);
+    for (dst, src) in data.iter_mut().zip(data_t.iter()) {
+        dst.re = src.0.into_f64(range);
+        dst.im = src.1.into_f64(range);
     }
 }
 
@@ -29,10 +38,10 @@ fn test_size<const N: usize>(planner: &mut FftPlanner<f64>) -> Vec<f64> {
     rustfft.process(&mut baseline);
 
     [
-        test::<f32, N>,
-        test::<f64, N>,
-        test::<i32, N>,
-        test::<i16, N>,
+        test_pairs::<f32, N>,
+        test_pairs::<f64, N>,
+        test_pairs::<i32, N>,
+        test_pairs::<i16, N>,
     ]
     .into_iter()
     .map(|f| {
