@@ -22,7 +22,9 @@ pub trait Arithmetic where Self: Sized + Copy + Add<Output = Self> + Sub<Output 
     fn scale_update(self, _: &mut Self::ScaleInfo) { }
     fn range_init() -> Self::RangeInfo;
     fn range_update(_: &mut Self::ScaleInfo, _: &mut Self::RangeInfo) { }
+
     fn mul(a: Self, b: Self, scale: Self::ScaleInfo) -> Self;
+    fn scale(self, scale: Self::ScaleInfo) -> Self;
 
     // Angle represens an angle in range [0, pi)
     // angles [pi, 2pi) are not used in this fft implementation
@@ -41,7 +43,9 @@ macro_rules! arithmetic_float {
     
         fn scale_init() -> Self::ScaleInfo { () }
         fn range_init() -> Self::RangeInfo { () }
+
         fn mul(a: Self, b: Self, _: Self::ScaleInfo) -> Self { a * b }
+        fn scale(self, _: Self::ScaleInfo) -> Self { self }
     
         fn sin_cos(angle: Angle) -> (Self, Self) {
             let len = TRIG_TABLE.len() - 1;
@@ -85,6 +89,7 @@ macro_rules! arithmetic_int {
         }
     
         fn mul(a: Self, b: Self, s: Self::ScaleInfo) -> Self { ((a as $wide * (b as $wide)) >> (s as u32)) as Self }
+        fn scale(self, s: Self::ScaleInfo) -> Self { self >> ((s as u32 + 1) - Self::BITS) }
     
         fn sin_cos(angle: Angle) -> (Self, Self) {
             let len = TRIG_TABLE.len() - 1;

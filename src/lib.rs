@@ -45,16 +45,16 @@ fn compute_arrays<T: Arithmetic, const N: usize>(re: &mut [T; N], im: &mut [T; N
                 let matchh = pair + step;
                 let product_re = T::mul(twiddle_re, re[matchh], scale) - T::mul(twiddle_im, im[matchh], scale);
                 let product_im = T::mul(twiddle_re, im[matchh], scale) + T::mul(twiddle_im, re[matchh], scale);
-                re[matchh] = T::mul(re[pair], T::from_f64(1.), scale) - product_re;
-                im[matchh] = T::mul(im[pair], T::from_f64(1.), scale) - product_im;
-                re[pair] = T::mul(re[pair], T::from_f64(1.), scale) + product_re;
-                im[pair] = T::mul(im[pair], T::from_f64(1.), scale) + product_im;
-                pair+=jump
+                re[matchh] = re[pair].scale(scale) - product_re;
+                im[matchh] = im[pair].scale(scale) - product_im;
+                re[pair] = re[pair].scale(scale) + product_re;
+                im[pair] = im[pair].scale(scale) + product_im;
+                pair += jump
             }
             
             // we need the factors below for the next iteration
             // if we don't iterate then don't compute
-            if group+1 == step { continue }
+            if group + 1 == step { continue }
 
             let angle = (group + 1) * (65536 / step);
             (twiddle_im, twiddle_re) = T::sin_cos(angle as _);
