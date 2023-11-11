@@ -1,6 +1,4 @@
 pub const TRIG_TABLE_POINTS: usize = 16384;
-#[cfg(feature = "bitrev_tables")]
-pub const BIT_REVERSE_TABLE_POINTS: usize = 0;
 
 #[cfg(feature = "wide_trig_lut")]
 pub type TrigTableT = i32;
@@ -4112,17 +4110,6 @@ pub const TRIG_TABLE: [TrigTableT; TRIG_TABLE_POINTS + 1] = {
     while i < ret.len() {
         let x = full_trig_table[(i * (full_trig_table.len() - 1)) / (ret.len() - 1)];
         ret[i] = -((x >> (32 - TrigTableT::BITS)) as TrigTableT);
-        i += 1;
-    }
-    ret
-};
-
-#[cfg(feature = "bitrev_tables")]
-pub const BIT_REVERSE_TABLE: [u16; BIT_REVERSE_TABLE_POINTS] = {
-    let mut ret = [0; BIT_REVERSE_TABLE_POINTS];
-    let mut i = 0;
-    while i < ret.len() {
-        ret[i] = (i as u16).reverse_bits();
         i += 1;
     }
     ret

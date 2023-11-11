@@ -13,4 +13,4 @@ rand = "0.8.5"
 
 [features]
 wide_trig_lut = ["nanofft/wide_trig_lut"]
-bitrev_tables = ["nanofft/bitrev_tables"]
+narrow_index_type = ["nanofft/narrow_index_type"]

@@ -4,13 +4,51 @@ extern crate nanofft;
 
 use rustfft::{ FftPlanner, num_complex::Complex };
 use rand::{ Rng, thread_rng };
-use nanofft::Arithmetic;
+
+trait Convert where Self: Sized {
+    type RangeInfo;
+
+    fn from_f64(x: f64) -> Self;
+    fn into_f64(self, s: Self::RangeInfo) -> f64;
+}
+
+macro_rules! convert_float {
+    ($($t:ty)*) => { $(
+
+    impl Convert for $t {
+        type RangeInfo = ();
+    
+        fn from_f64(x: f64) -> Self { x as Self }
+        fn into_f64(self, _: Self::RangeInfo) -> f64 { self as f64 }
+    }
+    
+    )* };
+}
+
+macro_rules! convert_int {
+    ($($t:ty)*) => { $(
+
+    impl Convert for $t {
+        type RangeInfo = i16;
+    
+        fn from_f64(x: f64) -> Self { (Self::MAX as f64 * x) as Self }
+        fn into_f64(self, i: Self::RangeInfo) -> f64 {
+            let scale = f64::from_bits(((i as i32 + 2 - f64::MIN_EXP) as u64) << (f64::MANTISSA_DIGITS - 1));
+            self as f64 * scale
+        }
+    }
+    
+    )* };
+}
+
+convert_float!(f32 f64);
+convert_int!(i8 i16 i32 i64);
 
 macro_rules! mktest {
     ($t:ty, arrays, $f:expr) => {
         |data: &mut [Complex<f64>; N]| {
-            let mut data_re = data.map(|x| <$t as Arithmetic>::from_f64(x.re));
-            let mut data_im = data.map(|x| <$t as Arithmetic>::from_f64(x.im));
+            let mut data_re = data.map(|x| <$t as Convert>::from_f64(x.re));
+            let mut data_im = data.map(|x| <$t as Convert>::from_f64(x.im));
             let range = $f(&mut data_re, &mut data_im);
             for (dst, src) in data.iter_mut().zip(data_re.iter().zip(data_im.iter())) {
                 dst.re = src.0.into_f64(range);
@@ -21,7 +59,7 @@ macro_rules! mktest {
 
     ($t:ty, pairs, $f:expr) => {
         |data: &mut [Complex<f64>; N]| {
-            let mut data_t = data.map(|x| (<$t as Arithmetic>::from_f64(x.re), <$t as Arithmetic>::from_f64(x.im)));
+            let mut data_t = data.map(|x| (<$t as Convert>::from_f64(x.re), <$t as Convert>::from_f64(x.im)));
             let range = $f(&mut data_t);
             for (dst, src) in data.iter_mut().zip(data_t.iter()) {
                 dst.re = src.0.into_f64(range);
@@ -45,25 +83,17 @@ fn test_size<const N: usize>(planner: &mut FftPlanner<f64>) -> Vec<f64> {
 
     #[cfg(debug_assertions)]
     let fns = [
-        mktest!(f32, arrays, nanofft::f32::fft_arrays::<N>),
-        mktest!(f64, arrays, nanofft::f64::fft_arrays::<N>),
-        mktest!(i32, arrays, nanofft::i32::fft_arrays::<N>),
-        mktest!(i16, arrays, nanofft::i16::fft_arrays::<N>),
-        // mktest!(f32, pairs, nanofft::f32::fft_pairs::<N>),
-        // mktest!(f64, pairs, nanofft::f64::fft_pairs::<N>),
-        // mktest!(i32, pairs, nanofft::i32::fft_pairs::<N>),
-        // mktest!(i16, pairs, nanofft::i16::fft_pairs::<N>),
         mktest!(f32, pairs, nanofft::f32::fft_pairs_dyn),
         mktest!(f64, pairs, nanofft::f64::fft_pairs_dyn),
-        mktest!(i32, pairs, nanofft::i32::fft_pairs_dyn),
         mktest!(i16, pairs, nanofft::i16::fft_pairs_dyn),
+        mktest!(i32, pairs, nanofft::i32::fft_pairs_dyn),
     ];
     #[cfg(not(debug_assertions))]
     let fns = [
         mktest!(f32, pairs, nanofft::f32::fft_pairs_dyn),
         mktest!(f64, pairs, nanofft::f64::fft_pairs_dyn),
-        mktest!(i32, pairs, nanofft::i32::fft_pairs_dyn),
         mktest!(i16, pairs, nanofft::i16::fft_pairs_dyn),
+        mktest!(i32, pairs, nanofft::i32::fft_pairs_dyn),
     ];
     
     fns.into_iter()
@@ -101,7 +131,7 @@ fn main() {
     ];
 
     let mut planner = FftPlanner::new();
-    println!("|points|   f32   |   f64   |   i32   |   i16   |");
+    println!("|points|   f32   |   f64   |   i16   |   i32   |");
     println!("|-----:|:-------:|:-------:|:-------:|:-------:|");
     let mut results = vec![Vec::new(); fns.len()];
     #[cfg(debug_assertions)]

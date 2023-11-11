@@ -1,13 +1,19 @@
 #![no_std]
-mod arithmetic;
 mod tables;
 
-pub use arithmetic::Arithmetic;
+use crate::tables::*;
+
+#[cfg(feature = "wide_angle_type")]
+pub type Angle = u32;
+#[cfg(not(feature = "wide_angle_type"))]
+pub type Angle = u16;
+const ANGLE_HALF_PI: Angle = 1 << (Angle::BITS - 1);
 
 #[cfg(feature = "narrow_index_type")]
 type Index = u16;
 #[cfg(not(feature = "narrow_index_type"))]
 type Index = u32;
+
 
 // Use of different types for each array is intentional.
 // It allows to also use this function to rearrange a single array
@@ -16,10 +22,11 @@ type Index = u32;
 // Based on microfft's implementation
 fn bit_reverse_reorder<A, B, const N: usize>(re: &mut [A; N], im: &mut [B; N]) {
     debug_assert!(N.is_power_of_two());
-    debug_assert!(Index::MAX as usize >= N);
+    debug_assert!(Index::MAX as usize + 1 >= N);
 
     let shift = Index::BITS - N.trailing_zeros();
-    for i in 0..(N as Index) {
+    for i in 0..(N as u32) {
+        let i = i as Index;
         let rev = i.reverse_bits();
         let j = rev >> shift;
         if j > i {
@@ -31,10 +38,11 @@ fn bit_reverse_reorder<A, B, const N: usize>(re: &mut [A; N], im: &mut [B; N]) {
 
 fn bit_reverse_reorder_dyn<T>(data: &mut [T]) {
     debug_assert!(data.len().is_power_of_two());
-    debug_assert!(Index::MAX as usize >= data.len());
+    debug_assert!(Index::MAX as usize + 1 >= data.len());
 
     let shift = Index::BITS - data.len().trailing_zeros();
-    for i in 0..(data.len() as Index) {
+    for i in 0..(data.len() as u32) {
+        let i = i as Index;
         let rev = i.reverse_bits();
         let j = rev >> shift;
         if j > i {
@@ -43,22 +51,46 @@ fn bit_reverse_reorder_dyn<T>(data: &mut [T]) {
     }
 }
 
+
+// Angle represens an angle in range [0, pi)
+// angles [pi, 2pi) are not used in this fft implementation
+fn sin_cos(angle: Angle) -> (TrigTableT, TrigTableT) {
+    let len = TRIG_TABLE.len() - 1;
+    if angle < ANGLE_HALF_PI {
+        let idx = angle as usize * len / (ANGLE_HALF_PI as usize);
+        (TRIG_TABLE[idx], -TRIG_TABLE[len - idx])
+    } else {
+        let idx = (angle - ANGLE_HALF_PI) as usize * len / (ANGLE_HALF_PI as usize);
+        (TRIG_TABLE[len - idx], TRIG_TABLE[idx])
+    }
+}
+
+
 macro_rules! fft_impl {
     (
         float; $t:ty; $len:expr;
-        $fname:ident($($arg:ident: $arg_type:ty),*) -> $ret:ty;
+        $fname:ident($($arg:ident: $arg_type:ty),*);
         $x:ident; $x_re:expr; $x_im:expr;
         $y:ident; $y_re:expr; $y_im:expr;
         $($generics:tt)*
     ) => {
         fft_impl!(
-            0. as $t; 1. as $t; (); (); $len;
-            |x, y, _| x * y;
-            |ang| <$t as Arithmetic>::sin_cos(ang);
-            |_, _| ();
-            |_, _| ();
-            |x, _| x;
-            $fname($($arg: $arg_type),*) -> ();
+            $len,
+            loop_init: let (mut twiddle_re, mut twiddle_im) = (1., 0.),
+            multiply: {
+                let product_re = twiddle_re * $y_re - twiddle_im * $y_im;
+                let product_im = twiddle_re * $y_im + twiddle_im * $y_re;
+                $y_re = $x_re - product_re;
+                $y_im = $x_im - product_im;
+                $x_re += product_re;
+                $x_im += product_im;
+            },
+            next_twiddle: |angle| {
+                let (sin, cos) = crate::sin_cos(angle as _);
+                twiddle_re = cos as $t / (crate::TrigTableT::MAX as $t);
+                twiddle_im = sin as $t / (crate::TrigTableT::MAX as $t);
+            },
+            $fname($($arg: $arg_type),*);
             $x; $x_re; $x_im;
             $y; $y_re; $y_im;
             $($generics)*
@@ -67,23 +99,57 @@ macro_rules! fft_impl {
 
     (
         int; $t:ty; $wide:ty; $len:expr;
-        $fname:ident($($arg:ident: $arg_type:ty),*) -> $ret:ty;
+        $fname:ident($($arg:ident: $arg_type:ty),*) $(-> $ret:ident: $ret_type:ty)?;
         $x:ident; $x_re:expr; $x_im:expr;
         $y:ident; $y_re:expr; $y_im:expr;
         $($generics:tt)*
     ) => {
         fft_impl!(
-            0 as $t; (!(1 as $t).reverse_bits()); 0 as $t; -((1 as $t).count_zeros() as i16); $len;
-            |x, y, s| ((x as $wide * (y as $wide)) >> (s as u32)) as $t;
-            |ang| <$t as Arithmetic>::sin_cos(ang);
-            |x: $t, s| s | x.abs();
-            |s: &mut $t, r: &mut i16| {
-                let margin = s.leading_zeros();
-                *s = (1 + (0 as $t).count_zeros() - margin) as _;
-                *r += 2 - (margin as i16);
-            };
-            |x, s| x >> ((s as u32 + 1) - (0 as $t).count_zeros());
-            $fname($($arg: $arg_type),*) -> i16;
+            $len,
+            loop_init: let (mut twiddle_re, mut twiddle_im, scale) = {
+                let mut scale = 0;
+
+                for $x in 0..$len {
+                    let combined = $x_re as $wide | (($x_im as $wide) << (0 as $t).count_zeros());
+                    scale |= combined ^ (combined << 1);
+                };
+                let scale = ((scale >> (1 as $wide).count_zeros()) | (scale >> (1 as $t).count_zeros())) & 1;
+
+                $($ret += (scale as $ret_type))?;
+
+                let one = (crate::TrigTableT::MAX as $wide).min((!(1 as $t).reverse_bits()) as $wide);
+                (one, 0, scale)
+            },
+            multiply: {
+                let shift = (1 as crate::TrigTableT).count_zeros().min((1 as $t).count_zeros());
+                if scale != 0 {
+                    $y_re >>= 1;
+                    $y_im >>= 1;
+                    $x_re >>= 1;
+                    $x_im >>= 1;
+                    let product_re = ((($y_re as $wide * twiddle_re) - ($y_im as $wide * twiddle_im)) >> shift) as $t;
+                    let product_im = ((($y_im as $wide * twiddle_re) + ($y_re as $wide * twiddle_im)) >> shift) as $t;
+                    $y_re = $x_re - product_re;
+                    $y_im = $x_im - product_im;
+                    $x_re += product_re;
+                    $x_im += product_im;
+                }
+                else {
+                    let product_re = ((($y_re as $wide * twiddle_re) - ($y_im as $wide * twiddle_im)) >> shift) as $t;
+                    let product_im = ((($y_im as $wide * twiddle_re) + ($y_re as $wide * twiddle_im)) >> shift) as $t;
+                    $y_re = $x_re - product_re;
+                    $y_im = $x_im - product_im;
+                    $x_re += product_re;
+                    $x_im += product_im;
+                };
+            },
+            next_twiddle: |angle| {
+                let (sin, cos) = crate::sin_cos(angle as _);
+                let shift = crate::TrigTableT::BITS.saturating_sub((0 as $t).count_zeros());
+                twiddle_re = (cos >> shift) as $wide;
+                twiddle_im = (sin >> shift) as $wide;
+            },
+            $fname($($arg: $arg_type),*) $(-> $ret: $ret_type)?;
             $x; $x_re; $x_im;
             $y; $y_re; $y_im;
             $($generics)*
@@ -91,67 +157,49 @@ macro_rules! fft_impl {
     };
 
     (
-        $zero:expr; $one:expr; $scale_init:expr; $range_init:expr; $len:expr;
-        $mul:expr;
-        $sin_cos:expr;
-        $scale_update:expr;
-        $range_update:expr;
-        $scale:expr;
-        $fname:ident($($arg:ident: $arg_type:ty),*) -> $ret:ty;
+        $len:expr,
+        loop_init: $loop_init:stmt,
+        multiply: $mul:block,
+        next_twiddle: |$angle:ident| $next_twiddle:block,
+        $fname:ident($($arg:ident: $arg_type:ty),*) $(-> $ret:ident: $ret_type:ty)?;
         $x:ident; $x_re:expr; $x_im:expr;
         $y:ident; $y_re:expr; $y_im:expr;
         $($generics:tt)*
     ) => {
 
-    fn $fname $($generics)* ($($arg: $arg_type),*) -> $ret {
-        let mut range = $range_init;
+    fn $fname $($generics)* ($($arg: $arg_type),* $(, mut $ret: $ret_type)?) $(-> $ret_type)? {
         let mut step = 1;
         while step < $len {
             let jump = step << 1;
-            let mut twiddle_re = $one;
-            let mut twiddle_im = $zero;
-            let mut scale = $scale_init;
-            for $x in 0..$len {
-                scale = $scale_update($x_re, scale);
-                scale = $scale_update($x_im, scale);
-            }
-            $range_update(&mut scale, &mut range);
+            $loop_init
             for group in 0..step {
                 let mut $x = group;
                 while $x < $len {
                     let $y = $x + step;
-                    let product_re = $mul(twiddle_re, $y_re, scale) - $mul(twiddle_im, $y_im, scale);
-                    let product_im = $mul(twiddle_re, $y_im, scale) + $mul(twiddle_im, $y_re, scale);
-                    $y_re = $scale($x_re, scale) - product_re;
-                    $y_im = $scale($x_im, scale) - product_im;
-                    $x_re = $scale($x_re, scale) + product_re;
-                    $x_im = $scale($x_im, scale) + product_im;
-                    $x += jump
+                    $mul
+                    $x += jump;
                 }
                 
                 // we need the factors below for the next iteration
                 // if we don't iterate then don't compute
                 if group + 1 == step { continue }
-    
-                let angle = (group + 1) * (65536 / step);
-                (twiddle_im, twiddle_re) = $sin_cos(angle as _);
+
+                let $angle = (group + 1) * (65536 / step);
+                $next_twiddle
             }
             step <<= 1;
         }
-        range
+        $($ret)?
     }
 
     };
 }
 
 macro_rules! type_impl {
-    ($kind:tt; $($mod:ident, $t:ty $(, $wide:ty)?);*) => { $( pub mod $mod {
-
-    use super::Arithmetic;
-
+    ($kind:tt; $($ret:ident = $ret_init:literal: $ret_type:ty)?; $mod:ident, $t:ty $(, $wide:ty)?) => { pub mod $mod {
     fft_impl!(
         $kind; $t; $($wide;)? N;
-        compute_pairs(data: &mut [($t, $t); N]) -> <$t as Arithmetic>::RangeInfo;
+        compute_pairs(data: &mut [($t, $t); N]) $(-> $ret: $ret_type)?;
         a; data[a].0; data[a].1;
         b; data[b].0; data[b].1;
         <const N: usize>
@@ -159,36 +207,38 @@ macro_rules! type_impl {
 
     fft_impl!(
         $kind; $t; $($wide;)? data.len();
-        compute_pairs_dyn(data: &mut [($t, $t)]) -> <$t as Arithmetic>::RangeInfo;
+        compute_pairs_dyn(data: &mut [($t, $t)]) $(-> $ret: $ret_type)?;
         a; data[a].0; data[a].1;
         b; data[b].0; data[b].1;
     );
 
     fft_impl!(
         $kind; $t; $($wide;)? N;
-        compute_arrays(re: &mut [$t; N], im: &mut [$t; N]) -> <$t as Arithmetic>::RangeInfo;
+        compute_arrays(re: &mut [$t; N], im: &mut [$t; N]) $(-> $ret: $ret_type)?;
         a; re[a]; im[a];
         b; re[b]; im[b];
         <const N: usize>
     );
 
-    pub fn fft_pairs<const N: usize>(data: &mut [($t, $t); N]) -> <$t as Arithmetic>::RangeInfo {
+    pub fn fft_pairs<const N: usize>(data: &mut [($t, $t); N]) $(-> $ret_type)? {
         super::bit_reverse_reorder(data, &mut [(); N]);
-        compute_pairs(data)
+        compute_pairs(data $(, $ret_init)?)
     }
 
-    pub fn fft_pairs_dyn(data: &mut [($t, $t)]) -> <$t as Arithmetic>::RangeInfo {
+    pub fn fft_pairs_dyn(data: &mut [($t, $t)]) $(-> $ret_type)? {
         super::bit_reverse_reorder_dyn(data);
-        compute_pairs_dyn(data)
+        compute_pairs_dyn(data $(, $ret_init)?)
     }
 
-    pub fn fft_arrays<const N: usize>(data_re: &mut [$t; N], data_im: &mut [$t; N]) -> <$t as Arithmetic>::RangeInfo {
+    pub fn fft_arrays<const N: usize>(data_re: &mut [$t; N], data_im: &mut [$t; N]) $(-> $ret_type)? {
         super::bit_reverse_reorder(data_re, data_im);
-        compute_arrays(data_re, data_im)
+        compute_arrays(data_re, data_im $(, $ret_init)?)
     }
 
-    } )* };
+    } };
 }
 
-type_impl!(float; f32, f32; f64, f64);
-type_impl!(int; i16, i16, i32; i32, i32, i64);
+type_impl!(float;; f32, f32);
+type_impl!(float;; f64, f64);
+type_impl!(int; lsb_mult_log2 = -15: i16; i16, i16, i32);
+type_impl!(int; lsb_mult_log2 = -31: i16; i32, i32, i64);

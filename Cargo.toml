@@ -12,4 +12,4 @@ edition = "2021"
 
 [features]
 wide_trig_lut = []
-bitrev_tables = []
+narrow_index_type = []
