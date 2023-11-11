@@ -1,12 +1,14 @@
-pub const TRIG_TABLE_POINTS: usize = 16384;
+pub const TRIG_TABLE_BITS: u32 = 14;
 
 #[cfg(feature = "wide_trig_lut")]
-pub type TrigTableT = i32;
+pub type TrigTableType = i32;
 #[cfg(not(feature = "wide_trig_lut"))]
-pub type TrigTableT = i16;
+pub type TrigTableType = i16;
 
-pub const TRIG_TABLE: [TrigTableT; TRIG_TABLE_POINTS + 1] = {
-    let full_trig_table = [ 0x00000000_i32, 
+pub const TRIG_TABLE: [(TrigTableType, TrigTableType); (1 << TRIG_TABLE_BITS) + 1] = {
+    type FullTrigTableType = i32;
+    const FULL_TRIG_TABLE_BITS: u32 = 16;
+    const FULL_TRIG_TABLE: [FullTrigTableType; (1 << FULL_TRIG_TABLE_BITS) + 1] = [ 0x00000000, 
         0x0000c910, 0x00019220, 0x00025b30, 0x0003243f, 0x0003ed4f, 0x0004b65f, 0x00057f6f, 0x0006487f, 0x0007118f, 0x0007da9f, 0x0008a3ae, 0x00096cbe, 0x000a35ce, 0x000afede, 0x000bc7ee, 0x000c90fe, 
         0x000d5a0d, 0x000e231d, 0x000eec2d, 0x000fb53d, 0x00107e4d, 0x0011475d, 0x0012106d, 0x0012d97c, 0x0013a28c, 0x00146b9c, 0x001534ac, 0x0015fdbc, 0x0016c6cc, 0x00178fdb, 0x001858eb, 0x001921fb, 
         0x0019eb0b, 0x001ab41b, 0x001b7d2b, 0x001c463b, 0x001d0f4a, 0x001dd85a, 0x001ea16a, 0x001f6a7a, 0x0020338a, 0x0020fc9a, 0x0021c5a9, 0x00228eb9, 0x002357c9, 0x002420d9, 0x0024e9e9, 0x0025b2f8, 
@@ -4104,13 +4106,18 @@ pub const TRIG_TABLE: [TrigTableT; TRIG_TABLE_POINTS + 1] = {
         0x7ffffdae, 0x7ffffdd4, 0x7ffffdf8, 0x7ffffe1b, 0x7ffffe3d, 0x7ffffe5e, 0x7ffffe7d, 0x7ffffe9c, 0x7ffffeb9, 0x7ffffed4, 0x7ffffeef, 0x7fffff08, 0x7fffff20, 0x7fffff37, 0x7fffff4d, 0x7fffff61, 
         0x7fffff74, 0x7fffff86, 0x7fffff97, 0x7fffffa6, 0x7fffffb4, 0x7fffffc1, 0x7fffffcd, 0x7fffffd8, 0x7fffffe1, 0x7fffffe9, 0x7ffffff0, 0x7ffffff5, 0x7ffffff9, 0x7ffffffd, 0x7ffffffe, 0x7fffffff, 
     ];
+        
 
-    let mut ret = [0; TRIG_TABLE_POINTS + 1];
-    let mut i = 0;
-    while i < ret.len() {
-        let x = full_trig_table[(i * (full_trig_table.len() - 1)) / (ret.len() - 1)];
-        ret[i] = -((x >> (32 - TrigTableT::BITS)) as TrigTableT);
-        i += 1;
+    let mut ret = [(0, 0); (1 << TRIG_TABLE_BITS) + 1];
+    let mut idx_ret = 0;
+    let shift = FullTrigTableType::BITS - TrigTableType::BITS;
+    while idx_ret < ret.len() {
+        let idx_full = idx_ret << (FULL_TRIG_TABLE_BITS - TRIG_TABLE_BITS - 1);
+        ret[idx_ret] = (
+            -(FULL_TRIG_TABLE[idx_full] >> shift) as TrigTableType,
+            -(FULL_TRIG_TABLE[(1 << FULL_TRIG_TABLE_BITS) - idx_full] >> shift) as TrigTableType,
+        );
+        idx_ret += 1;
     }
     ret
 };

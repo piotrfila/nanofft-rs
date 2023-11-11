@@ -102,15 +102,22 @@ mod app {
 
                 while size <= max_size {
                     let repeats = max_size as u32 * max_size.trailing_zeros() / (size as u32 * size.trailing_zeros());
+                    // let repeats = max_size / size;
                     let buf = &mut buf[..size];
 
                     let t1 = crate::app::monotonics::now();
+                    
                     for _ in 0..repeats {
-                        let _ = nanofft::i16::fft_pairs_dyn(buf);
+                        let _ = nanofft::i16::fft_pairs_dyn(x);
                     }
                     let t2 = crate::app::monotonics::now();
 
-                    sio.fifo.write_blocking(t2.ticks().wrapping_sub(t1.ticks()) as _);
+                    let time_in_millionths_of_cycle = (t2.ticks().wrapping_sub(t1.ticks()) as u64) * 125_000_000;
+                    let time_per_iteration = time_in_millionths_of_cycle / (repeats as u64);
+                    let time_per_multiply = time_per_iteration / ((size as u32 * size.trailing_zeros()) as u64);
+                    
+                    sio.fifo.write_blocking(size as _);
+                    sio.fifo.write_blocking(time_per_multiply.try_into().unwrap());
                     size <<= 1;
                 }
                 sio.fifo.write_blocking(0);
@@ -164,7 +171,12 @@ mod app {
             let mut buf = [0u8; 16];
             match serial.read(&mut buf) {
                 Ok(0) | Err(_) => { }
-                Ok(_count) => {
+                Ok(count) => {
+                    for i in 0..count {
+                        if buf[i] == 'r' as u8 {
+                            hal::rom_data::reset_to_usb_boot(0, 0);
+                        }
+                    }
                     let _ = fifo.write(0);
                 }
             }
@@ -178,6 +190,7 @@ mod app {
             let mut wr_ptr = &mut buf[..];
             
             for i in (0..(wr_ptr.len() - 2)).rev() {
+                if i % 4 == 2 { continue }
                 wr_ptr[i] = '0' as u8 + ((ret % 10) as u8);
                 ret /= 10;
                 if ret == 0 {
@@ -186,7 +199,7 @@ mod app {
                 }
             }
 
-            let mut wr_ptr = wr_ptr.as_ref();
+            let mut wr_ptr = &buf[..];
 
             while !wr_ptr.is_empty() {
                 let _ = serial.write(wr_ptr).map(|len| {

@@ -3,13 +3,9 @@ mod tables;
 
 use crate::tables::*;
 
-#[cfg(feature = "wide_angle_type")]
 pub type Angle = u32;
-#[cfg(not(feature = "wide_angle_type"))]
-pub type Angle = u16;
-const ANGLE_HALF_PI: Angle = 1 << (Angle::BITS - 1);
 
-#[cfg(feature = "narrow_index_type")]
+#[cfg(feature = "narrow_indyex_type")]
 type Index = u16;
 #[cfg(not(feature = "narrow_index_type"))]
 type Index = u32;
@@ -53,15 +49,31 @@ fn bit_reverse_reorder_dyn<T>(data: &mut [T]) {
 
 
 // Angle represens an angle in range [0, pi)
-// angles [pi, 2pi) are not used in this fft implementation
-fn sin_cos(angle: Angle) -> (TrigTableT, TrigTableT) {
-    let len = TRIG_TABLE.len() - 1;
-    if angle < ANGLE_HALF_PI {
-        let idx = angle as usize * len / (ANGLE_HALF_PI as usize);
-        (TRIG_TABLE[idx], -TRIG_TABLE[len - idx])
-    } else {
-        let idx = (angle - ANGLE_HALF_PI) as usize * len / (ANGLE_HALF_PI as usize);
-        (TRIG_TABLE[len - idx], TRIG_TABLE[idx])
+// other angles are not used in this fft implementation
+fn sin_cos(angle: Angle) -> (TrigTableType, TrigTableType) {
+    let shift = Angle::BITS - TRIG_TABLE_BITS;
+
+    let angle_signed = 0_i32.wrapping_add_unsigned(angle);
+
+    if angle_signed < 0 {
+        if angle_signed << 1 < 0 {
+            let idx = (!(angle << 2) >> shift) as usize;
+            (TRIG_TABLE[idx].0, TRIG_TABLE[idx].1)
+        }
+        else {
+            let idx = ((angle << 2) >> shift) as usize;
+            (TRIG_TABLE[idx].1, TRIG_TABLE[idx].0)
+        }
+    }
+    else {
+        if angle_signed << 1 < 0 {
+            let idx = (!(angle << 2) >> shift) as usize;
+            (TRIG_TABLE[idx].1, -TRIG_TABLE[idx].0)
+        }
+        else {
+            let idx = ((angle << 2) >> shift) as usize;
+            (TRIG_TABLE[idx].0, -TRIG_TABLE[idx].1)
+        }
     }
 }
 
@@ -86,9 +98,9 @@ macro_rules! fft_impl {
                 $x_im += product_im;
             },
             next_twiddle: |angle| {
-                let (sin, cos) = crate::sin_cos(angle as _);
-                twiddle_re = cos as $t / (crate::TrigTableT::MAX as $t);
-                twiddle_im = sin as $t / (crate::TrigTableT::MAX as $t);
+                let (sin, cos) = crate::sin_cos(angle);
+                twiddle_re = cos as $t / (crate::TrigTableType::MAX as $t);
+                twiddle_im = sin as $t / (crate::TrigTableType::MAX as $t);
             },
             $fname($($arg: $arg_type),*);
             $x; $x_re; $x_im;
@@ -117,11 +129,11 @@ macro_rules! fft_impl {
 
                 $($ret += (scale as $ret_type))?;
 
-                let one = (crate::TrigTableT::MAX as $wide).min((!(1 as $t).reverse_bits()) as $wide);
+                let one = (crate::TrigTableType::MAX as $wide).min((!(1 as $t).reverse_bits()) as $wide);
                 (one, 0, scale)
             },
             multiply: {
-                let shift = (1 as crate::TrigTableT).count_zeros().min((1 as $t).count_zeros());
+                let shift = (1 as crate::TrigTableType).count_zeros().min((1 as $t).count_zeros());
                 if scale != 0 {
                     $y_re >>= 1;
                     $y_im >>= 1;
@@ -144,8 +156,8 @@ macro_rules! fft_impl {
                 };
             },
             next_twiddle: |angle| {
-                let (sin, cos) = crate::sin_cos(angle as _);
-                let shift = crate::TrigTableT::BITS.saturating_sub((0 as $t).count_zeros());
+                let (sin, cos) = crate::sin_cos(angle);
+                let shift = crate::TrigTableType::BITS.saturating_sub((0 as $t).count_zeros());
                 twiddle_re = (cos >> shift) as $wide;
                 twiddle_im = (sin >> shift) as $wide;
             },
@@ -168,8 +180,11 @@ macro_rules! fft_impl {
     ) => {
 
     fn $fname $($generics)* ($($arg: $arg_type),* $(, mut $ret: $ret_type)?) $(-> $ret_type)? {
+        let mut step_log2 = 0;
         let mut step = 1;
-        while step < $len {
+        while {
+            step < $len
+        } {
             let jump = step << 1;
             $loop_init
             for group in 0..step {
@@ -184,10 +199,12 @@ macro_rules! fft_impl {
                 // if we don't iterate then don't compute
                 if group + 1 == step { continue }
 
-                let $angle = (group + 1) * (65536 / step);
+                let $angle = (group as crate::Angle + 1) << (crate::Angle::BITS - step_log2);
+
                 $next_twiddle
             }
-            step <<= 1;
+            step_log2 += 1;
+            step = 1 << step_log2;
         }
         $($ret)?
     }
