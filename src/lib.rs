@@ -16,17 +16,17 @@ type Index = u32;
 macro_rules! maybe_const {
     (pub $($x:tt)*) => {
         #[cfg(feature = "const")]
-        const $($x)*
-
-        #[cfg(not(feature = "const"))]
-        $($x)*
-    };
-    ($($x:tt)*) => {
-        #[cfg(feature = "const")]
         pub const $($x)*
 
         #[cfg(not(feature = "const"))]
         pub $($x)*
+    };
+    ($($x:tt)*) => {
+        #[cfg(feature = "const")]
+        const $($x)*
+
+        #[cfg(not(feature = "const"))]
+        $($x)*
     };
 }
 
@@ -52,6 +52,27 @@ macro_rules! generic_fn_variant {
         maybe_const! { fn $dynamic$(<$($generic),*>)?($($arg: $arg_type)*) $(-> $ret)? $body }
         maybe_const! { fn $($const_generic)* $(-> $ret)? $body }
     };
+    (
+        pub fn $dynamic:ident$(<$($generic:ident),*>)?($($arg:ident: $arg_type:ty)*) $(-> $ret:ty)? $body:block
+        $($const_generic:tt)*
+    ) => {
+        pub fn $dynamic$(<$($generic),*>)?($($arg: $arg_type)*) $(-> $ret)? $body
+        pub fn $($const_generic)* $(-> $ret)? $body
+    };
+    (
+        pub const fn $dynamic:ident$(<$($generic:ident),*>)?($($arg:ident: $arg_type:ty)*) $(-> $ret:ty)? $body:block
+        $($const_generic:tt)*
+    ) => {
+        pub const fn $dynamic$(<$($generic),*>)?($($arg: $arg_type)*) $(-> $ret)? $body
+        pub const fn $($const_generic)* $(-> $ret)? $body
+    };
+    (
+        pub const? fn $dynamic:ident$(<$($generic:ident),*>)?($($arg:ident: $arg_type:ty)*) $(-> $ret:ty)? $body:block
+        $($const_generic:tt)*
+    ) => {
+        maybe_const! { pub fn $dynamic$(<$($generic),*>)?($($arg: $arg_type)*) $(-> $ret)? $body }
+        maybe_const! { pub fn $($const_generic)* $(-> $ret)? $body }
+    };
 }
 
 
@@ -61,7 +82,7 @@ macro_rules! generic_fn_variant {
 // (and hoping the compiler optimizes out operations on ()s)
 // Based on microfft's implementation
 generic_fn_variant! { 
-    const? fn bit_reverse_reorder_dyn<T>(data: &mut [T]) {
+    pub const? fn bit_reverse_reorder_dyn<T>(data: &mut [T]) {
         debug_assert!(data.len().is_power_of_two());
         debug_assert!(Index::MAX as usize + 1 >= data.len());
 
@@ -80,6 +101,27 @@ generic_fn_variant! {
     bit_reverse_reorder<T, const N: usize>(data: &mut [T; N])
 }
 
+generic_fn_variant!{
+    pub const? fn interleave_dyn<T>(arr: &mut [(T, T)]) {
+        use core::mem::swap;
+
+        let mut log2 = arr.len().trailing_zeros() - 2;
+        for i in 0.. {
+            for j in 0..(1 << i) {
+                let j = j * 4;
+                arr[(j + 1) << log2..(j + 3) << log2].rotate_left(1 << log2);
+            }
+            if log2 == 0 { break; }
+            log2 -= 1;
+        }
+        for j in 0..arr.len() / 2 {
+            let j = j * 2;
+            let (a, b) = arr.split_at_mut(j + 1);
+            swap(&mut a[j].1, &mut b[0].0)
+        }
+    }
+    interleave<T, const N: usize>(arr: &mut [(T, T); N])
+}
 
 // Angle represens an angle in range [0, pi)
 // other angles are not used in this fft implementation
@@ -252,7 +294,7 @@ macro_rules! fft_impl {
 }
 
 macro_rules! type_impl {
-    ($kind:tt; $($ret:ident = $ret_init:literal: $ret_type:ty)?; $mod:ident, $t:ty, $($wide:ty)? $(,$qualifier:tt)?) => { pub mod $mod {
+    ($kind:tt; $div2:expr; $($ret:ident = $ret_init:literal: $ret_type:ty)?; $mod:ident, $t:ty, $($wide:ty)? $(,$qualifier:tt)?) => { pub mod $mod {
     fft_impl!(
         $kind; $t; $($wide;)? N;
         (data: &mut [($t, $t); N]) $(-> $ret: $ret_type)?;
@@ -277,6 +319,47 @@ macro_rules! type_impl {
         $($qualifier)? fn compute_arrays<const N: usize>
     );
 
+    generic_fn_variant!{
+        pub const? fn rfft_twice_postprocess_dyn(arr: &mut [($t, $t)]) {
+            use core::mem::swap;
+
+            let mid = arr.len() / 2;
+            let (a, b) = arr.split_at_mut(mid);
+            swap(&mut a[0].1, &mut b[0].0);
+            for (x, y) in a[1..].iter_mut().zip(b.iter_mut().rev()) {
+                let z_re = $div2(x.0);
+                let z_im = $div2(x.1);
+                let w_re = $div2(y.0);
+                let w_im = $div2(y.1);
+                x.0 = z_re + w_re;
+                x.1 = z_im - w_im;
+                y.0 = w_im + z_im;
+                y.1 = w_re - z_re;
+            }
+
+            for i in 1..b.len() / 2 {
+                b.swap(i, b.len() - i);
+            }
+        }
+        rfft_twice_postprocess<const N: usize>(arr: &mut [($t, $t); N])
+    }
+
+    pub $($qualifier)? fn rfft_pairs_twice<const N: usize>(data: &mut [($t, $t); N]) $(-> $ret_type)? {
+        debug_assert!(data.len().is_power_of_two());
+        super::interleave(data);
+        let ret = fft_pairs(data);
+        rfft_twice_postprocess(data);
+        ret
+    }
+
+    pub $($qualifier)? fn rfft_pairs_twice_dyn(data: &mut [($t, $t)]) $(-> $ret_type)? {
+        debug_assert!(data.len().is_power_of_two());
+        super::interleave_dyn(data);
+        let ret = fft_pairs_dyn(data);
+        rfft_twice_postprocess_dyn(data);
+        ret
+    }
+
     pub $($qualifier)? fn fft_pairs<const N: usize>(data: &mut [($t, $t); N]) $(-> $ret_type)? {
         debug_assert!(data.len().is_power_of_two());
         super::bit_reverse_reorder(data);
@@ -299,13 +382,13 @@ macro_rules! type_impl {
     } };
 }
 
-type_impl!(float;; f32, f32,);
-type_impl!(float;; f64, f64,);
+type_impl!(float; |x| x * 0.5_f32;; f32, f32,);
+type_impl!(float; |x| x * 0.5_f64;; f64, f64,);
 #[cfg(feature = "const")]
-type_impl!(int; lsb_mult_log2 = -15: i16; i16, i16, i32, const);
+type_impl!(int; |x| x >> 1; lsb_mult_log2 = -15: i16; i16, i16, i32, const);
 #[cfg(feature = "const")]
-type_impl!(int; lsb_mult_log2 = -31: i16; i32, i32, i64, const);
+type_impl!(int; |x| x >> 1; lsb_mult_log2 = -31: i16; i32, i32, i64, const);
 #[cfg(not(feature = "const"))]
-type_impl!(int; lsb_mult_log2 = -15: i16; i16, i16, i32);
+type_impl!(int; |x| x >> 1; lsb_mult_log2 = -15: i16; i16, i16, i32);
 #[cfg(not(feature = "const"))]
-type_impl!(int; lsb_mult_log2 = -31: i16; i32, i32, i64);
+type_impl!(int; |x| x >> 1; lsb_mult_log2 = -31: i16; i32, i32, i64);
