@@ -1,14 +1,58 @@
 #![no_std]
+#![cfg_attr(feature = "const", feature(const_mut_refs))]
+#![cfg_attr(feature = "const", feature(const_swap))]
 mod tables;
 
 use crate::tables::*;
 
 pub type Angle = u32;
 
-#[cfg(feature = "narrow_indyex_type")]
+#[cfg(feature = "narrow_index_type")]
 type Index = u16;
 #[cfg(not(feature = "narrow_index_type"))]
 type Index = u32;
+
+
+macro_rules! maybe_const {
+    (pub $($x:tt)*) => {
+        #[cfg(feature = "const")]
+        const $($x)*
+
+        #[cfg(not(feature = "const"))]
+        $($x)*
+    };
+    ($($x:tt)*) => {
+        #[cfg(feature = "const")]
+        pub const $($x)*
+
+        #[cfg(not(feature = "const"))]
+        pub $($x)*
+    };
+}
+
+macro_rules! generic_fn_variant {
+    (
+        fn $dynamic:ident$(<$($generic:ident),*>)?($($arg:ident: $arg_type:ty)*) $(-> $ret:ty)? $body:block
+        $($const_generic:tt)*
+    ) => {
+        fn $dynamic$(<$($generic),*>)?($($arg: $arg_type)*) $(-> $ret)? $body
+        fn $($const_generic)* $(-> $ret)? $body
+    };
+    (
+        const fn $dynamic:ident$(<$($generic:ident),*>)?($($arg:ident: $arg_type:ty)*) $(-> $ret:ty)? $body:block
+        $($const_generic:tt)*
+    ) => {
+        const fn $dynamic$(<$($generic),*>)?($($arg: $arg_type)*) $(-> $ret)? $body
+        const fn $($const_generic)* $(-> $ret)? $body
+    };
+    (
+        const? fn $dynamic:ident$(<$($generic:ident),*>)?($($arg:ident: $arg_type:ty)*) $(-> $ret:ty)? $body:block
+        $($const_generic:tt)*
+    ) => {
+        maybe_const! { fn $dynamic$(<$($generic),*>)?($($arg: $arg_type)*) $(-> $ret)? $body }
+        maybe_const! { fn $($const_generic)* $(-> $ret)? $body }
+    };
+}
 
 
 // Use of different types for each array is intentional.
@@ -16,41 +60,30 @@ type Index = u32;
 // by passing `&mut [(); N]` as the second argument.
 // (and hoping the compiler optimizes out operations on ()s)
 // Based on microfft's implementation
-fn bit_reverse_reorder<A, B, const N: usize>(re: &mut [A; N], im: &mut [B; N]) {
-    debug_assert!(N.is_power_of_two());
-    debug_assert!(Index::MAX as usize + 1 >= N);
+generic_fn_variant! { 
+    const? fn bit_reverse_reorder_dyn<T>(data: &mut [T]) {
+        debug_assert!(data.len().is_power_of_two());
+        debug_assert!(Index::MAX as usize + 1 >= data.len());
 
-    let shift = Index::BITS - N.trailing_zeros();
-    for i in 0..(N as u32) {
-        let i = i as Index;
-        let rev = i.reverse_bits();
-        let j = rev >> shift;
-        if j > i {
-            re.swap(i as usize, j as usize);
-            im.swap(i as usize, j as usize);
+        let shift = Index::BITS - data.len().trailing_zeros();
+        let mut it = 0;
+        while it < (data.len() as u32) {
+            let i = it as Index;
+            let rev = i.reverse_bits();
+            let j = rev >> shift;
+            if j > i {
+                data.swap(i as usize, j as usize);
+            }
+            it += 1;
         }
     }
-}
-
-fn bit_reverse_reorder_dyn<T>(data: &mut [T]) {
-    debug_assert!(data.len().is_power_of_two());
-    debug_assert!(Index::MAX as usize + 1 >= data.len());
-
-    let shift = Index::BITS - data.len().trailing_zeros();
-    for i in 0..(data.len() as u32) {
-        let i = i as Index;
-        let rev = i.reverse_bits();
-        let j = rev >> shift;
-        if j > i {
-            data.swap(i as usize, j as usize);
-        }
-    }
+    bit_reverse_reorder<T, const N: usize>(data: &mut [T; N])
 }
 
 
 // Angle represens an angle in range [0, pi)
 // other angles are not used in this fft implementation
-fn sin_cos(angle: Angle) -> (TrigTableType, TrigTableType) {
+const fn sin_cos(angle: Angle) -> (TrigTableType, TrigTableType) {
     let shift = Angle::BITS - TRIG_TABLE_BITS;
 
     let angle_signed = 0_i32.wrapping_add_unsigned(angle);
@@ -81,10 +114,10 @@ fn sin_cos(angle: Angle) -> (TrigTableType, TrigTableType) {
 macro_rules! fft_impl {
     (
         float; $t:ty; $len:expr;
-        $fname:ident($($arg:ident: $arg_type:ty),*);
+        ($($arg:ident: $arg_type:ty),*);
         $x:ident; $x_re:expr; $x_im:expr;
         $y:ident; $y_re:expr; $y_im:expr;
-        $($generics:tt)*
+        fn $($signature:tt)*
     ) => {
         fft_impl!(
             $len,
@@ -102,38 +135,42 @@ macro_rules! fft_impl {
                 twiddle_re = cos as $t / (crate::TrigTableType::MAX as $t);
                 twiddle_im = sin as $t / (crate::TrigTableType::MAX as $t);
             },
-            $fname($($arg: $arg_type),*);
+            ($($arg: $arg_type),*);
             $x; $x_re; $x_im;
             $y; $y_re; $y_im;
-            $($generics)*
+            fn $($signature)*
         );
     };
 
     (
         int; $t:ty; $wide:ty; $len:expr;
-        $fname:ident($($arg:ident: $arg_type:ty),*) $(-> $ret:ident: $ret_type:ty)?;
+        ($($arg:ident: $arg_type:ty),*) $(-> $ret:ident: $ret_type:ty)?;
         $x:ident; $x_re:expr; $x_im:expr;
         $y:ident; $y_re:expr; $y_im:expr;
-        $($generics:tt)*
+        $($signature:tt)*
     ) => {
         fft_impl!(
             $len,
             loop_init: let (mut twiddle_re, mut twiddle_im, scale) = {
                 let mut scale = 0;
 
-                for $x in 0..$len {
+                let mut $x = 0;
+                while $x < $len {
                     let combined = $x_re as $wide | (($x_im as $wide) << (0 as $t).count_zeros());
                     scale |= combined ^ (combined << 1);
+                    $x += 1;
                 };
                 let scale = ((scale >> (1 as $wide).count_zeros()) | (scale >> (1 as $t).count_zeros())) & 1;
 
                 $($ret += (scale as $ret_type))?;
 
-                let one = (crate::TrigTableType::MAX as $wide).min((!(1 as $t).reverse_bits()) as $wide);
+                let (a, b) = (crate::TrigTableType::MAX as $wide, (!(1 as $t).reverse_bits()) as $wide);
+                let one = if a < b { a } else { b };
                 (one, 0, scale)
             },
             multiply: {
-                let shift = (1 as crate::TrigTableType).count_zeros().min((1 as $t).count_zeros());
+                let (a, b) = ((1 as crate::TrigTableType).count_zeros(), (1 as $t).count_zeros());
+                let shift = if a < b { a } else { b };
                 if scale != 0 {
                     $y_re >>= 1;
                     $y_im >>= 1;
@@ -161,10 +198,10 @@ macro_rules! fft_impl {
                 twiddle_re = (cos >> shift) as $wide;
                 twiddle_im = (sin >> shift) as $wide;
             },
-            $fname($($arg: $arg_type),*) $(-> $ret: $ret_type)?;
+            ($($arg: $arg_type),*) $(-> $ret: $ret_type)?;
             $x; $x_re; $x_im;
             $y; $y_re; $y_im;
-            $($generics)*
+            $($signature)*
         );
     };
 
@@ -173,13 +210,13 @@ macro_rules! fft_impl {
         loop_init: $loop_init:stmt,
         multiply: $mul:block,
         next_twiddle: |$angle:ident| $next_twiddle:block,
-        $fname:ident($($arg:ident: $arg_type:ty),*) $(-> $ret:ident: $ret_type:ty)?;
+        ($($arg:ident: $arg_type:ty),*) $(-> $ret:ident: $ret_type:ty)?;
         $x:ident; $x_re:expr; $x_im:expr;
         $y:ident; $y_re:expr; $y_im:expr;
-        $($generics:tt)*
+        $($signature:tt)*
     ) => {
 
-    fn $fname $($generics)* ($($arg: $arg_type),* $(, mut $ret: $ret_type)?) $(-> $ret_type)? {
+    $($signature)* ($($arg: $arg_type),* $(, mut $ret: $ret_type)?) $(-> $ret_type)? {
         let mut step_log2 = 0;
         let mut step = 1;
         while {
@@ -187,7 +224,8 @@ macro_rules! fft_impl {
         } {
             let jump = step << 1;
             $loop_init
-            for group in 0..step {
+            let mut group = 0;
+            loop {
                 let mut $x = group;
                 while $x < $len {
                     let $y = $x + step;
@@ -197,9 +235,10 @@ macro_rules! fft_impl {
                 
                 // we need the factors below for the next iteration
                 // if we don't iterate then don't compute
-                if group + 1 == step { continue }
+                group += 1;
+                if group == step { break }
 
-                let $angle = (group as crate::Angle + 1) << (crate::Angle::BITS - step_log2);
+                let $angle = (group as crate::Angle) << (crate::Angle::BITS - step_log2);
 
                 $next_twiddle
             }
@@ -213,49 +252,60 @@ macro_rules! fft_impl {
 }
 
 macro_rules! type_impl {
-    ($kind:tt; $($ret:ident = $ret_init:literal: $ret_type:ty)?; $mod:ident, $t:ty $(, $wide:ty)?) => { pub mod $mod {
+    ($kind:tt; $($ret:ident = $ret_init:literal: $ret_type:ty)?; $mod:ident, $t:ty, $($wide:ty)? $(,$qualifier:tt)?) => { pub mod $mod {
     fft_impl!(
         $kind; $t; $($wide;)? N;
-        compute_pairs(data: &mut [($t, $t); N]) $(-> $ret: $ret_type)?;
+        (data: &mut [($t, $t); N]) $(-> $ret: $ret_type)?;
         a; data[a].0; data[a].1;
         b; data[b].0; data[b].1;
-        <const N: usize>
+        $($qualifier)? fn compute_pairs<const N: usize>
     );
 
     fft_impl!(
         $kind; $t; $($wide;)? data.len();
-        compute_pairs_dyn(data: &mut [($t, $t)]) $(-> $ret: $ret_type)?;
+        (data: &mut [($t, $t)]) $(-> $ret: $ret_type)?;
         a; data[a].0; data[a].1;
         b; data[b].0; data[b].1;
+        $($qualifier)? fn compute_pairs_dyn
     );
 
     fft_impl!(
         $kind; $t; $($wide;)? N;
-        compute_arrays(re: &mut [$t; N], im: &mut [$t; N]) $(-> $ret: $ret_type)?;
+        (re: &mut [$t; N], im: &mut [$t; N]) $(-> $ret: $ret_type)?;
         a; re[a]; im[a];
         b; re[b]; im[b];
-        <const N: usize>
+        $($qualifier)? fn compute_arrays<const N: usize>
     );
 
-    pub fn fft_pairs<const N: usize>(data: &mut [($t, $t); N]) $(-> $ret_type)? {
-        super::bit_reverse_reorder(data, &mut [(); N]);
+    pub $($qualifier)? fn fft_pairs<const N: usize>(data: &mut [($t, $t); N]) $(-> $ret_type)? {
+        debug_assert!(data.len().is_power_of_two());
+        super::bit_reverse_reorder(data);
         compute_pairs(data $(, $ret_init)?)
     }
 
-    pub fn fft_pairs_dyn(data: &mut [($t, $t)]) $(-> $ret_type)? {
+    pub $($qualifier)? fn fft_pairs_dyn(data: &mut [($t, $t)]) $(-> $ret_type)? {
+        debug_assert!(data.len().is_power_of_two());
         super::bit_reverse_reorder_dyn(data);
         compute_pairs_dyn(data $(, $ret_init)?)
     }
 
-    pub fn fft_arrays<const N: usize>(data_re: &mut [$t; N], data_im: &mut [$t; N]) $(-> $ret_type)? {
-        super::bit_reverse_reorder(data_re, data_im);
+    pub $($qualifier)? fn fft_arrays<const N: usize>(data_re: &mut [$t; N], data_im: &mut [$t; N]) $(-> $ret_type)? {
+        debug_assert!(N.is_power_of_two());
+        super::bit_reverse_reorder(data_re);
+        super::bit_reverse_reorder(data_im);
         compute_arrays(data_re, data_im $(, $ret_init)?)
     }
 
     } };
 }
 
-type_impl!(float;; f32, f32);
-type_impl!(float;; f64, f64);
+type_impl!(float;; f32, f32,);
+type_impl!(float;; f64, f64,);
+#[cfg(feature = "const")]
+type_impl!(int; lsb_mult_log2 = -15: i16; i16, i16, i32, const);
+#[cfg(feature = "const")]
+type_impl!(int; lsb_mult_log2 = -31: i16; i32, i32, i64, const);
+#[cfg(not(feature = "const"))]
 type_impl!(int; lsb_mult_log2 = -15: i16; i16, i16, i32);
+#[cfg(not(feature = "const"))]
 type_impl!(int; lsb_mult_log2 = -31: i16; i32, i32, i64);

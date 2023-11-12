@@ -11,5 +11,6 @@ license = "MIT"
 edition = "2021"
 
 [features]
+const = []
 wide_trig_lut = []
 narrow_index_type = []
